@@ -1,0 +1,15 @@
+resource r0 {
+  device    /dev/drbd0;
+  disk      {{ drbd_backing_disk }};
+  meta-disk internal;
+{% for node in groups['nodes'] %} 
+  on {{ hostvars[node]['ansible_hostname'] }} {
+    address   {{ (hostvars[node]['ansible_all_ipv4_addresses']|ipaddr(drbd_replication_network))[0]}}:7777;
+    node-id   {{loop.index0}};
+  }
+{% endfor %}
+
+  connection-mesh {
+        hosts {% for node in groups['nodes'] %}{{ (hostvars[node]['ansible_hostname']) }}{% if not loop.last %} {% endif %}{% endfor %};
+  }
+}

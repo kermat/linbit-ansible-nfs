@@ -1,0 +1,26 @@
+totem {
+  version: 2
+  secauth: off
+  cluster_name: linbit-cluster
+  transport: udpu
+  #rrp_mode: passive
+}
+
+nodelist {
+{% for node in groups['nodes'] %}  node {
+    ring0_addr: {{(hostvars[node]['ansible_eth0']['ipv4']['address'])}}
+    nodeid: {{loop.index0}}
+  }
+{% endfor %}
+
+}
+
+quorum {
+  provider: corosync_votequorum
+  #two_node: 1
+}
+
+logging {
+  to_syslog: yes
+}
+

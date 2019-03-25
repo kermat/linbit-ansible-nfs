@@ -1,0 +1,226 @@
+---
+- hosts: nodes
+  any_errors_fatal: true
+  gather_facts: yes
+  become: yes
+  vars_prompt:
+    - name: lb_user
+      prompt: "http://my.linbit.com username"
+      private: no
+    - name: lb_pass
+      prompt: "http://my.linbit.com password (will not be echoed)"
+      private: yes
+    - name: lb_con_id
+      prompt: "LINBIT Contract ID (provided by LINBIT)"
+      private: no
+    - name: lb_clu_id
+      prompt: "LINBIT Cluster ID (provided by LINBIT)"
+      private: no
+ 
+  tasks:
+  - name: set selinux to permissive
+    selinux:
+      policy: targeted
+      state: permissive
+  
+  - name: yum update all system packages to latest
+    yum: name=* state=latest
+
+  - name: check if reboot is needed after kernel update
+    shell: LAST_KERNEL=$(rpm -q --last kernel | awk 'NR==1{sub(/kernel-/,""); print $1}'); CURRENT_KERNEL=$(uname -r); if [ $LAST_KERNEL != $CURRENT_KERNEL ]; then echo 'reboot'; else echo 'no'; fi
+    ignore_errors: true
+    register: reboot_hint
+
+  - name: reboot to load new kernel if needed
+    reboot: 
+    when: reboot_hint.stdout.find("reboot") != -1
+    register: reboot_happened
+
+  - name: fetch the latest linbit-manage-node.py
+    get_url:
+      url: "https://my.linbit.com/linbit-manage-node.py"
+      dest: "/tmp/linbit-manage-node.py"
+      mode: "0640"
+      force: "yes"
+
+  - name: register nodes using linbit-manage-node.py
+    shell: bash -c "LB_USERNAME={{ lb_user }} LB_PASSWORD={{ lb_pass  }} LB_CONTRACT_ID={{ lb_con_id  }} LB_CLUSTER_ID={{ lb_clu_id }} python /tmp/linbit-manage-node.py"
+
+  - name: install cluster stack and NFS related packages
+    yum:
+      name:
+        - kmod-drbd
+        - drbd
+        - drbdtop
+        - pacemaker
+        - corosync
+        - fence-agents-all
+        - resource-agents
+        - crmsh
+        - nfs-utils
+        - rpcbind
+      update_cache: yes
+      state: latest
+
+  - name: check if firewalld is running
+    shell: systemctl status firewalld
+    register: firewalld
+    failed_when: ( firewalld.rc not in [ 0, 3 ] )
+
+  - name: open ports in firewalld for DRBD
+    firewalld: 
+      port: 7777-7999/tcp
+      permanent: true
+      immediate: true
+      state: enabled
+    when: firewalld.rc == 0
+
+  - name: open ports in firewalld for Pacemaker/Corosync/DLM
+    firewalld: 
+      service: high-availability
+      permanent: true
+      immediate: true
+      state: enabled
+    when: firewalld.rc == 0
+
+  - name: open ports in firewalld for NFS
+    firewalld: 
+      service: nfs
+      permanent: true
+      immediate: true
+      state: enabled
+    when: firewalld.rc == 0
+
+  - name: open ports in firewalld for mountd
+    firewalld: 
+      service: mountd
+      permanent: true
+      immediate: true
+      state: enabled
+    when: firewalld.rc == 0
+
+  - name: open ports in firewalld for rpc-bind
+    firewalld: 
+      service: rpc-bind
+      permanent: true
+      immediate: true
+      state: enabled
+    when: firewalld.rc == 0
+
+  - name: configure DRBD device
+    template: src=r0.j2 dest=/etc/drbd.d/r0.res
+    register: drbd0_config
+
+  - name: configure Corosync
+    template: src=corosync.j2 dest=/etc/corosync/corosync.conf
+    register: corosync
+
+  - name: stop Pacemaker to renew config
+    systemd: name=pacemaker state=stopped
+  
+  - name: stop Corosync to renew config
+    systemd: name=corosync state=stopped
+  
+  - name: wait for Pacemaker resources to stop
+    pause:
+      seconds: 40
+
+  - name: make sure DRBD device is down before wipefs
+    shell: drbdadm down r0 >> /root/linbit-ans-drbd.log
+
+  - name: wipefs on DRBD backing disk to prepare for metadata creation
+    shell: wipefs -afq {{ drbd_backing_disk }}
+
+  - name: drbdadm create-md
+    shell: drbdadm create-md r0 --force >> /root/linbit-ans-drbd.log
+
+  - name: drbdadm up
+    shell: drbdadm up r0 >> /root/linbit-ans-drbd.log
+
+  - name: wait for DRBD to become fully Connected
+    run_once: true
+    shell: "drbdadm cstate r0 | grep -v Connected"
+    register: connected
+    until: connected.rc != 0
+    retries: 5
+    delay: 10
+    failed_when: "connected.rc !=0 and connected.rc !=1"
+
+  - name: check for Inconsistent/Inconsistent[/...] data
+    run_once: true
+    shell: "drbdadm dstate r0 | grep -xe '\\(Inconsistent[/]*\\)*'"
+    register: dsinconsistent
+
+  - name: skip DRBD initial sync if all data is inconsistent
+    run_once: true
+    shell: drbdadm new-current-uuid r0 --clear-bitmap >> /root/linbit-ans-drbd.log
+    when: dsinconsistent.rc == 0
+   
+  - name: restart Corosync
+    systemd: name=corosync state=restarted
+
+  - name: restart Pacemaker
+    systemd: name=pacemaker state=restarted
+
+  - name: enable Corosync at boot
+    systemd: name=corosync enabled=yes
+
+  - name: enable Pacemaker at boot
+    systemd: name=pacemaker enabled=yes
+
+  - name: place the cib import file on all nodes
+    template: src=cib.j2 dest=/root/cib.txt
+    register: cib_file
+
+  - name: stop all cluster resources for cib replacement
+    run_once: true
+    shell: crm configure property stop-all-resources=true >> /root/linbit-ans-cib-import.log
+
+  - name: wait for resources to stop
+    pause:
+      seconds: 40
+
+  - name: put the cluster into maintenance-mode to bring DRBD up temporarily
+    run_once: true
+    shell: crm configure property maintenance-mode=true >> /root/linbit-ans-cib-import.log
+
+  - name: down DRBD r0 to be certain it is down before up
+    shell: bash -c 'drbdadm down r0' >> /root/linbit-ans-drbd.log
+
+  - name: bring DRBD up in order to format
+    shell: bash -c 'drbdadm up r0' >> /root/linbit-ans-drbd.log
+
+  - name: wait for DRBD to connect before formatting
+    run_once: true
+    shell: "drbdadm cstate r0 | grep -v Connected"
+    retries: 5
+    delay: 10
+    register: connected
+    until: connected.rc != 0
+    failed_when: "connected.rc !=0 and connected.rc !=1"
+
+  - name: create the filesystem if this cluster or DRBD config changed
+    run_once: true
+    filesystem:
+      fstype: xfs
+      dev: /dev/drbd0
+      force: yes
+
+  - name: take DRBD down to give control back to the cluster
+    shell: bash -c 'drbdadm down r0' >> /root/linbit-ans-drbd.log
+
+  - name: delete old cib to re-evaluate Pacemaker's nodelist
+    run_once: true
+    shell: cibadmin -E --force
+
+  - name: import the new cib on one node
+    run_once: true
+    shell: crm configure load replace /root/cib.txt >> /root/linbit-ans-cib-import.log
+  
+  - name: take the cluster out of maintenance-mode from one node
+    run_once: true
+    shell: crm configure property maintenance-mode=false >> /root/linbit-ans-cib-import.log
+
+  - name: start cluster resources after replacement from one node
+    run_once: true
+    shell: crm configure property stop-all-resources=false >> /root/linbit-ans-cib-import.log
