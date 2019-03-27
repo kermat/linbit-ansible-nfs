@@ -47,7 +47,7 @@ You will be prompted for any variables not set with `--extra-vars`.
 
 # Notes
 
-You can add and remove nodes to the cluster by adding/removeing nodes in the inventory file and re-rerunning the playbook. You will lose any data created on your cluster when re-runing the playbook (see `wipefs` task in `site.yaml`). When "scaling down" (removing nodes) by re-running the playbook, be sure to stop Pacemaker/Corosync/DRBD on the node(s) you're removing.
+You can add and remove nodes to the cluster by adding/removing nodes in the inventory file and re-rerunning the playbook. You will lose any data created on your cluster when re-running the playbook (see `wipefs` task in `site.yaml`). When "scaling down" (removing nodes) by re-running the playbook, be sure to stop Pacemaker/Corosync/DRBD on the node(s) you're removing.
 
 # Feedback
 
