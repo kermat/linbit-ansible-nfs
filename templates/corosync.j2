@@ -8,8 +8,8 @@ totem {
 
 nodelist {
 {% for node in groups['nodes'] %}  node {
-    ring0_addr: {{(hostvars[node]['ansible_eth0']['ipv4']['address'])}}
-    nodeid: {{loop.index0}}
+    ring0_addr: {{hostvars[node].ansible_default_ipv4.address}}
+    nodeid: {{loop.index}}
   }
 {% endfor %}
 
