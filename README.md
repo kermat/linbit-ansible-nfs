@@ -8,7 +8,7 @@ System requirements:
   - Deployment environment must have Ansible `2.7.0+` and `python-netaddr`.
   - All target systems must have passwordless SSH access.
   - All hostnames used in inventory file are resolvable (better to use IP addresses).
-  - Target systems are CentOS/RHEL 7.
+  - Target systems are RHEL 7, 8 or 9 (or RHEL compatible distros).
 
 # Usage
 
@@ -34,7 +34,7 @@ cluster_vip_cidr="24"
 drbd_backing_disk="/dev/vdb"
 drbd_replication_network="172.16.7.0/24"
 
-# do not change ansible_user
+# ansible_user needs sudo/root access
 ansible_user="root"
 ```
 

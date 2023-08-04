@@ -44,17 +44,15 @@
       force: "yes"
 
   - name: register nodes using linbit-manage-node.py
-    shell: bash -c "LB_USERNAME={{ lb_user }} LB_PASSWORD={{ lb_pass  }} LB_CONTRACT_ID={{ lb_con_id  }} LB_CLUSTER_ID={{ lb_clu_id }} python /tmp/linbit-manage-node.py"
+    shell: bash -c "LB_USERNAME={{ lb_user }} LB_PASSWORD={{ lb_pass  }} LB_CONTRACT_ID={{ lb_con_id  }} LB_CLUSTER_ID={{ lb_clu_id }} {{ ansible_python.executable }} /tmp/linbit-manage-node.py"
 
   - name: install cluster stack and NFS related packages
     yum:
       name:
         - kmod-drbd
         - drbd
-        - drbdtop
         - pacemaker
         - corosync
-        - fence-agents-all
         - resource-agents
         - crmsh
         - nfs-utils
